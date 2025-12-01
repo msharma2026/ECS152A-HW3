@@ -103,7 +103,7 @@ def print_metrics(total_bytes: int, duration: float, delays: List[float]) -> Non
     print("\nDemo transfer complete!")
     print(f"duration={duration:.3f}s throughput={throughput:.2f} bytes/sec")
     print(
-        f"avg_delay={avg_delay:.6f}s avg_jitter={avg_jitter:.6f}s (TODO: Calculate actual values)"
+        f"avg_delay={avg_delay:.6f}s avg_jitter={avg_jitter:.6f}s"
     )
     print(f"{throughput:.7f},{avg_delay:.7f},{avg_jitter:.7f},{score:.7f}")
 
