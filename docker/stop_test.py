@@ -63,12 +63,7 @@ def load_payload_chunks() -> List[bytes]:
         )
         sys.exit(1)
 
-    if not data:
-        return [b"Hello from ECS152A!", b"Second packet from skeleton sender"]
-
-    first = data[:MSS] or b"First chunk placeholder"
-    second = data[MSS : 2 * MSS] or b"Second chunk placeholder"
-    return [first, second]
+    return [data[i : i + MSS] for i in range(0, len(data), MSS)]
 
 
 def make_packet(seq_id: int, payload: bytes) -> bytes:
@@ -81,7 +76,7 @@ def parse_ack(packet: bytes) -> Tuple[int, str]:
     return seq, msg
 
 
-def print_metrics(total_bytes: int, duration: float) -> None:
+def print_metrics(total_bytes: int, duration: float, delays: List[float]) -> None:
     """
     Print transfer metrics in the format expected by test scripts.
 
@@ -89,11 +84,21 @@ def print_metrics(total_bytes: int, duration: float) -> None:
     with actual calculated metrics from their implementation.
     """
     throughput = total_bytes / duration
-
-    # Placeholder values - students should calculate these based on actual measurements
     avg_delay = 0.0
     avg_jitter = 0.0
-    score = 0.0
+
+    if delays:
+        avg_delay = sum(delays) / len(delays) 
+
+    if len(delays) > 1:
+        jitter_sum = sum(abs(delays[i] - delays[i-1]) for i in range(1, len(delays)))
+        avg_jitter = jitter_sum / (len(delays) - 1)
+ 
+
+    # Prevents divide by zero errors
+    safe_jitter = avg_jitter if avg_jitter > 0 else 1e-6
+    safe_delay = avg_delay if avg_delay > 0 else 1e-6
+    score = (throughput/2000) + (15/safe_jitter) + (35/safe_delay)
 
     print("\nDemo transfer complete!")
     print(f"duration={duration:.3f}s throughput={throughput:.2f} bytes/sec")
@@ -122,6 +127,7 @@ def main() -> None:
     )
 
     start = time.time()
+    packet_delays = []
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(ACK_TIMEOUT)
@@ -129,7 +135,7 @@ def main() -> None:
 
         for seq_id, payload in transfers:
             pkt = make_packet(seq_id, payload)
-            print(f"Sending seq={seq_id}, bytes={len(payload)}")
+            packet_start = time.time()
 
             retries = 0
             while True:
@@ -149,30 +155,33 @@ def main() -> None:
                     continue
 
                 ack_id, msg = parse_ack(ack_pkt)
-                print(f"Received {msg.strip()} for ack_id={ack_id}")
 
                 if msg.startswith("fin"):
                     # Respond with FIN/ACK to let receiver exit cleanly
                     fin_ack = make_packet(ack_id, b"FIN/ACK")
                     sock.sendto(fin_ack, addr)
                     duration = max(time.time() - start, 1e-6)
-                    print_metrics(total_bytes, duration)
+                    print_metrics(total_bytes, duration, packet_delays)
                     return
 
                 if msg.startswith("ack") and ack_id >= seq_id + len(payload):
+                    packet_delays.append(time.time() - packet_start)
                     break
                 # Else: duplicate/stale ACK, continue waiting
 
         # Wait for final FIN after EOF packet
         while True:
-            ack_pkt, _ = sock.recvfrom(PACKET_SIZE)
-            ack_id, msg = parse_ack(ack_pkt)
-            if msg.startswith("fin"):
-                fin_ack = make_packet(ack_id, b"FIN/ACK")
-                sock.sendto(fin_ack, addr)
-                duration = max(time.time() - start, 1e-6)
-                print_metrics(total_bytes, duration)
-                return
+            try:
+                ack_pkt, _ = sock.recvfrom(PACKET_SIZE)
+                ack_id, msg = parse_ack(ack_pkt)
+                if msg.startswith("fin"):
+                    fin_ack = make_packet(ack_id, b"FIN/ACK")
+                    sock.sendto(fin_ack, addr)
+                    duration = max(time.time() - start, 1e-6)
+                    print_metrics(total_bytes, duration, packet_delays)
+                    return
+            except socket.timeout:
+                break
 
 
 if __name__ == "__main__":

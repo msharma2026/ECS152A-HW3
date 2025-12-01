@@ -33,7 +33,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for %%I in ("%PAYLOAD_SOURCE%") do set "PAYLOAD_BASENAME=%%~nxi"
+for %%I in ("%PAYLOAD_SOURCE%") do set "PAYLOAD_BASENAME=%%~nxI"
 call :derive_received "%PAYLOAD_BASENAME%" RECEIVED_BASENAME
 
 set "CONTAINER_PAYLOAD_FILE=/hdd/%PAYLOAD_BASENAME%"
@@ -92,7 +92,8 @@ echo ==========================================
 echo Step 2/4: Preparing Test Environment
 echo ==========================================
 echo [INFO] Copying your sender file into container...
-docker cp "%SENDER_FILE%" %CONTAINER_NAME%:/app/sender.py >nul 2>&1
+
+docker cp "%SENDER_FILE%" %CONTAINER_NAME%:/app/sender.py
 if errorlevel 1 (
     echo [ERROR] Failed to copy sender file into container
     exit /b 1
@@ -124,11 +125,9 @@ echo Step 4/4: Running Your Sender
 echo ==========================================
 echo [INFO] Executing your sender implementation...
 echo.
-
 docker exec %CONTAINER_NAME% env RECEIVER_PORT=%RECEIVER_PORT% TEST_FILE=%CONTAINER_PAYLOAD_FILE% PAYLOAD_FILE=%CONTAINER_PAYLOAD_FILE% python3 /app/sender.py 2>&1
 set "SENDER_EXIT_CODE=%errorlevel%"
 echo.
-
 if not "%SENDER_EXIT_CODE%"=="0" (
     echo [ERROR] Sender exited with error code %SENDER_EXIT_CODE%
     echo [WARNING] Check the output above for error messages
