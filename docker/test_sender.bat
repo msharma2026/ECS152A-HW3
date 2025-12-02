@@ -23,7 +23,7 @@ if not exist "%SENDER_FILE%" (
 set "PAYLOAD_ARG=%~2"
 if "%PAYLOAD_ARG%"=="" set "PAYLOAD_ARG=file.zip"
 
-if not defined NUM_RUNS set "NUM_RUNS=1"
+if not defined NUM_RUNS set "NUM_RUNS=10"
 if not defined RECEIVER_PORT set "RECEIVER_PORT=5001"
 
 call :resolve_payload "%PAYLOAD_ARG%" PAYLOAD_SOURCE
@@ -45,6 +45,7 @@ echo ==========================================
 echo [INFO] Sender file : %SENDER_FILE%
 echo [INFO] Payload file: %PAYLOAD_SOURCE% ^(copied as %CONTAINER_PAYLOAD_FILE%^)
 echo [INFO] Receiver port (inside container): %RECEIVER_PORT%
+echo [INFO] Number of runs: %NUM_RUNS%
 
 echo.
 echo ==========================================
@@ -110,39 +111,73 @@ echo [SUCCESS] Payload ready
 
 echo.
 echo ==========================================
-echo Step 3/4: Starting Receiver
+echo Step 3/4 and 4/4: Running Loop (%NUM_RUNS% times)
 echo ==========================================
-echo [INFO] Resetting receiver state...
-docker exec %CONTAINER_NAME% pkill -f receiver.py >nul 2>&1
-docker exec %CONTAINER_NAME% rm -f %CONTAINER_OUTPUT_FILE% >nul 2>&1
-docker exec -d %CONTAINER_NAME% env RECEIVER_PORT=%RECEIVER_PORT% TEST_FILE=%CONTAINER_PAYLOAD_FILE% PAYLOAD_FILE=%CONTAINER_PAYLOAD_FILE% RECEIVER_OUTPUT_FILE=%CONTAINER_OUTPUT_FILE% python3 /app/receiver.py >nul 2>&1
-timeout /t 2 /nobreak >nul
-echo [SUCCESS] Receiver is running inside the container
 
-echo.
-echo ==========================================
-echo Step 4/4: Running Your Sender
-echo ==========================================
-echo [INFO] Executing your sender implementation...
-echo.
-docker exec %CONTAINER_NAME% env RECEIVER_PORT=%RECEIVER_PORT% TEST_FILE=%CONTAINER_PAYLOAD_FILE% PAYLOAD_FILE=%CONTAINER_PAYLOAD_FILE% python3 /app/sender.py 2>&1
-set "SENDER_EXIT_CODE=%errorlevel%"
-echo.
-if not "%SENDER_EXIT_CODE%"=="0" (
-    echo [ERROR] Sender exited with error code %SENDER_EXIT_CODE%
-    echo [WARNING] Check the output above for error messages
-    exit /b 1
+set "TOTAL_THROUGHPUT=0"
+set "TOTAL_DELAY=0"
+set "TOTAL_JITTER=0"
+set "TOTAL_SCORE=0"
+set "SUCCESSFUL_RUNS=0"
+
+for /L %%i in (1,1,%NUM_RUNS%) do (
+    echo.
+    echo ------------------------------------------
+    echo Run %%i:
+    echo ------------------------------------------
+    
+    docker exec %CONTAINER_NAME% pkill -f receiver.py >nul 2>&1
+    docker exec %CONTAINER_NAME% rm -f %CONTAINER_OUTPUT_FILE% >nul 2>&1
+    docker exec -d %CONTAINER_NAME% env RECEIVER_PORT=%RECEIVER_PORT% TEST_FILE=%CONTAINER_PAYLOAD_FILE% PAYLOAD_FILE=%CONTAINER_PAYLOAD_FILE% RECEIVER_OUTPUT_FILE=%CONTAINER_OUTPUT_FILE% python3 /app/receiver.py >nul 2>&1
+    timeout /t 2 /nobreak >nul
+
+    docker exec %CONTAINER_NAME% env RECEIVER_PORT=%RECEIVER_PORT% TEST_FILE=%CONTAINER_PAYLOAD_FILE% PAYLOAD_FILE=%CONTAINER_PAYLOAD_FILE% python3 /app/sender.py > run_output.txt 2>&1
+    
+    set "SENDER_EXIT_CODE=!errorlevel!"
+    type run_output.txt
+    
+    if "!SENDER_EXIT_CODE!"=="0" (
+        for /f "usebackq tokens=1,2,3,4 delims=," %%A in (`type run_output.txt ^| findstr /r "^[0-9].*,.*,.*,.*$"`) do (
+            set "RUN_TH=%%A"
+            set "RUN_DEL=%%B"
+            set "RUN_JIT=%%C"
+            set "RUN_SCR=%%D"
+            
+            for /f %%V in ('powershell -command "!TOTAL_THROUGHPUT! + %%A"') do set "TOTAL_THROUGHPUT=%%V"
+            for /f %%V in ('powershell -command "!TOTAL_DELAY! + %%B"') do set "TOTAL_DELAY=%%V"
+            for /f %%V in ('powershell -command "!TOTAL_JITTER! + %%C"') do set "TOTAL_JITTER=%%V"
+            for /f %%V in ('powershell -command "!TOTAL_SCORE! + %%D"') do set "TOTAL_SCORE=%%V"
+            
+            set /a SUCCESSFUL_RUNS+=1
+        )
+    ) else (
+        echo [ERROR] Run %%i failed.
+    )
+    
+    del run_output.txt
 )
 
-echo ==========================================
-echo Performance Metrics
-echo ==========================================
-echo [INFO] Check the output above for metrics (CSV format):
-echo   throughput,delay,jitter,score
 echo.
-echo [SUCCESS] Test completed successfully!
-echo.
+echo ==========================================
+echo Final Results (Averaged over %SUCCESSFUL_RUNS% runs)
+echo ==========================================
 
+if %SUCCESSFUL_RUNS% GTR 0 (
+    for /f %%V in ('powershell -command "%TOTAL_THROUGHPUT% / %SUCCESSFUL_RUNS%"') do set "AVG_TH=%%V"
+    for /f %%V in ('powershell -command "%TOTAL_DELAY% / %SUCCESSFUL_RUNS%"') do set "AVG_DEL=%%V"
+    for /f %%V in ('powershell -command "%TOTAL_JITTER% / %SUCCESSFUL_RUNS%"') do set "AVG_JIT=%%V"
+    for /f %%V in ('powershell -command "%TOTAL_SCORE% / %SUCCESSFUL_RUNS%"') do set "AVG_SCR=%%V"
+    
+    echo Average Throughput: !AVG_TH!
+    echo Average Delay:      !AVG_DEL!
+    echo Average Jitter:     !AVG_JIT!
+    echo Average Score:      !AVG_SCR!
+) else (
+    echo No successful runs to average.
+)
+
+echo.
+echo [SUCCESS] Test completed!
 endlocal
 exit /b 0
 
